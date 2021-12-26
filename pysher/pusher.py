@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pysher.channel import Channel
 from pysher.connection import Connection
 import hashlib
@@ -8,47 +10,116 @@ import json
 VERSION = '0.6.0'
 
 
+class PusherHost(object):
+    _protocol_version = 7
+
+    def __init__(self, key: str):
+        self._key = key
+        self._secret = ""
+
+        self._client_id = "Pysher"
+        self._host = "ws.pusherapp.com"
+        self._path_prefix = ""
+        self._secure = True
+        self._port = 443
+
+    @staticmethod
+    def from_url(url: str):
+        parsed = urlparse(url)
+
+        scheme = parsed.scheme
+        if scheme.startswith('http'):
+            scheme = scheme.replace('http', 'ws')  # http -> ws and https -> wss
+        if scheme not in ['ws', 'wss']:
+            raise ValueError(f"Unknown scheme for url: {scheme}")
+
+        port = parsed.port
+        if not port:
+            port = 80 if scheme == 'ws' else 443  # Secure port by default
+
+        url_path = parsed.path
+        if '/app/' not in url_path:
+            raise ValueError(f"Cannot parse URL path. Expected to find '/app/' in '{url_path}'")
+        path_prefix, key = url_path.split('/app/')
+
+        return PusherHost(key) \
+            .host(parsed.hostname) \
+            .port(port) \
+            .path_prefix(path_prefix) \
+            .secure(scheme == "wss")
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @property
+    def key_as_bytes(self):
+        return self._key.encode('UTF-8')
+
+    @property
+    def secret_as_bytes(self):
+        return self._secret.encode('UTF-8')
+
+    @property
+    def url(self):
+        path = f"{self._path_prefix}/app/{self._key}" \
+               f"?client={self._client_id}&version={VERSION}&protocol={self._protocol_version}"
+
+        if path.startswith('/'):
+            path = path[1:]
+
+        scheme = "wss" if self._secure else "ws"
+
+        return f"{scheme}://{self._host}:{self._port}/{path}"
+
+    def cluster(self, name: str):
+        # https://pusher.com/docs/clusters
+        self._host = f"ws-{name}.pusher.com"
+        return self
+
+    def host(self, hostname: str):
+        self._host = hostname
+        return self
+
+    def port(self, port: int):
+        self._port = port
+        return self
+
+    def path_prefix(self, prefix: str):
+        self._path_prefix = prefix
+        return self
+
+    def secure(self, is_secure: bool):
+        self._secure = is_secure
+        return self
+
+    def secret(self, secret: str):
+        self._secret = secret
+        return self
+
+
 class Pusher(object):
-    host = "ws.pusherapp.com"
     client_id = "Pysher"
     protocol = 6
 
-    def __init__(self, key, cluster="", secure=True, secret="", user_data=None, log_level=logging.INFO,
-                 daemon=True, port=443, reconnect_interval=10, custom_host="", auto_sub=False,
-                 http_proxy_host="", http_proxy_port=0, http_no_proxy=None, http_proxy_auth=None,
-                 **thread_kwargs):
+    def __init__(self, host: PusherHost, user_data=None, log_level=logging.INFO,
+                 daemon=True, reconnect_interval=10, auto_sub=False):
         """Initialize the Pusher instance.
 
-        :param str or bytes key:
-        :param str cluster:
-        :param bool secure:
-        :param bytes or str secret:
+
         :param Optional[Dict] user_data:
         :param str log_level:
         :param bool daemon:
-        :param int port:
         :param int or float reconnect_interval:
-        :param str custom_host:
         :param bool auto_sub:
-        :param stt http_proxy_host:
-        :param int http_proxy_port:
-        :param http_no_proxy:
-        :param http_proxy_auth:
-        :param Any thread_kwargs:
         """
-        # https://pusher.com/docs/clusters
-        if cluster:
-            self.host = "ws-{cluster}.pusher.com".format(cluster=cluster)
-        else:
-            self.host = "ws.pusherapp.com"
-
-        self.key = key
-        self.secret = secret
+        self.host: PusherHost = host
+        self.url = host.url
+        self.key = host.key
 
         self.user_data = user_data or {}
 
         self.channels = {}
-        self.url = self._build_url(secure, port, custom_host)
 
         if auto_sub:
             reconnect_handler = self._reconnect_handler
@@ -60,20 +131,7 @@ class Pusher(object):
                                      log_level=log_level,
                                      daemon=daemon,
                                      reconnect_interval=reconnect_interval,
-                                     socket_kwargs=dict(http_proxy_host=http_proxy_host,
-                                                        http_proxy_port=http_proxy_port,
-                                                        http_no_proxy=http_no_proxy,
-                                                        http_proxy_auth=http_proxy_auth,
-                                                        ping_timeout=100),
-                                     **thread_kwargs)
-
-    @property
-    def key_as_bytes(self):
-        return self.key if isinstance(self.key, bytes) else self.key.encode('UTF-8')
-
-    @property
-    def secret_as_bytes(self):
-        return self.secret if isinstance(self.secret, bytes) else self.secret.encode('UTF-8')
+                                     socket_kwargs=dict(ping_timeout=100))
 
     def connect(self):
         """Connect to Pusher"""
@@ -154,9 +212,9 @@ class Pusher(object):
         :param str channel_name: Name of the channel to generate a signature for.
         :rtype: str
         """
-        subject = "{}:{}".format(self.connection.socket_id, channel_name)
-        h = hmac.new(self.secret_as_bytes, subject.encode('utf-8'), hashlib.sha256)
-        auth_key = "{}:{}".format(self.key, h.hexdigest())
+        subject = f"{self.connection.socket_id}:{channel_name}"
+        h = hmac.new(self.host.secret_as_bytes, subject.encode('utf-8'), hashlib.sha256)
+        auth_key = f"{self.key}:{h.hexdigest()}"
 
         return auth_key
 
@@ -166,21 +224,8 @@ class Pusher(object):
         :param str channel_name: Name of the channel to generate a signature for.
         :rtype: str
         """
-        subject = "{}:{}:{}".format(self.connection.socket_id, channel_name, json.dumps(self.user_data))
-        h = hmac.new(self.secret_as_bytes, subject.encode('utf-8'), hashlib.sha256)
-        auth_key = "{}:{}".format(self.key, h.hexdigest())
+        subject = f"{self.connection.socket_id}:{channel_name}:{json.dumps(self.user_data)}"
+        h = hmac.new(self.host.secret_as_bytes, subject.encode('utf-8'), hashlib.sha256)
+        auth_key = f"{self.key}:{h.hexdigest()}"
 
         return auth_key
-
-    def _build_url(self, secure=True, port=None, custom_host=None):
-        path = "/app/{}?client={}&version={}&protocol={}".format(
-            self.key, self.client_id, VERSION, self.protocol
-        )
-
-        proto = "wss" if secure else "ws"
-
-        host = custom_host or self.host
-        if not port:
-            port = 443 if secure else 80
-
-        return "{}://{}:{}{}".format(proto, host, port, path)
