@@ -1,9 +1,8 @@
-import json
 import logging
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import urlparse
 
-from pysher.authentication import PysherAuthentication, AuthResult
+from pysher.authentication import PysherAuthentication
 from pysher.channel import Channel
 from pysher.connection import Connection
 
@@ -15,7 +14,6 @@ class PusherHost(object):
 
     def __init__(self, key: str):
         self._key = key
-        self._secret = ""
 
         self._client_id = "Pysher"
         self._host = "ws.pusherapp.com"
@@ -85,114 +83,38 @@ class PusherHost(object):
         self._secure = is_secure
         return self
 
-    def secret(self, secret: str):
-        self._secret = secret
-        return self
-
 
 class Pusher(object):
-    client_id = "Pysher"
-    protocol = 6
-
     def __init__(self,
-                 host: PusherHost,
+                 host: Union[str, PusherHost],
                  authenticator: Optional[PysherAuthentication] = None,
                  log_level=logging.INFO,
-                 daemon=True,
-                 reconnect_interval=10,
-                 auto_sub=False):
-        self.host: PusherHost = host
-        self.authenticator: Optional[PysherAuthentication] = authenticator
+                 reconnect_interval=10):
+        url = host  # Assume it's the host url
+        if isinstance(host, str) and not host.startswith('ws'):
+            # host is probably app key instead
+            url = PusherHost(host).url
+        elif isinstance(host, PusherHost):
+            url = host.url
 
-        self.channels = {}
+        self._channels = {}
 
-        reconnect_handler = self._reconnect_handler if auto_sub else None
-
-        self.connection = Connection(self._event_handler,
-                                     host.url,
-                                     reconnect_handler=reconnect_handler,
-                                     log_level=log_level,
-                                     daemon=daemon,
-                                     reconnect_interval=reconnect_interval,
-                                     socket_kwargs=dict(ping_timeout=100))
+        self._connection = Connection(url,
+                                      authenticator,
+                                      log_level=log_level,
+                                      reconnect_interval=reconnect_interval,
+                                      socket_kwargs=dict(ping_timeout=100))
 
     def connect(self):
         """Connect to Pusher"""
-        self.connection.start()
+        self._connection.connect()
 
     def disconnect(self, timeout=None):
         """Disconnect from Pusher"""
-        self.connection.disconnect(timeout)
-        self.channels = {}
+        self._connection.disconnect(timeout)
 
-    def subscribe(self, channel_name):
-        """Subscribe to a channel.
+    def __getitem__(self, channel_name: str) -> Channel:
+        if channel_name not in self._channels:
+            self._channels[channel_name] = Channel(channel_name, self._connection)
 
-        :param str channel_name: The name of the channel to subscribe to.
-        :param str auth: The token to use if authenticated externally.
-        :rtype: pysher.Channel
-        """
-        data = {'channel': channel_name}
-
-        is_private = channel_name.startswith('private-')
-        is_presence = channel_name.startswith('presence-')
-        needs_auth = is_private or is_presence
-
-        auth_result: Optional[AuthResult] = None
-        if needs_auth:
-            auth_result = self.authenticator.auth_token(self.connection.socket_id, channel_name)
-
-        if auth_result is not None:
-            data['auth'] = auth_result.token
-
-            if is_presence:
-                user_data = auth_result.user_data or {}
-
-                data['channel_data'] = json.dumps(user_data)
-
-        self.connection.send_event('pusher:subscribe', data)
-
-        self.channels[channel_name] = Channel(channel_name, self.connection)
-
-        return self.channels[channel_name]
-
-    def unsubscribe(self, channel_name):
-        """Unsubscribe from a channel
-
-        :param str channel_name: The name of the channel to unsubscribe from.
-        """
-        if channel_name in self.channels:
-            self.connection.send_event(
-                'pusher:unsubscribe', {
-                    'channel': channel_name,
-                }
-            )
-            del self.channels[channel_name]
-
-    def channel(self, channel_name):
-        """Get an existing channel object by name
-
-        :param str channel_name: The name of the channel you want to retrieve
-        :rtype: pysher.Channel or None
-        """
-        return self.channels.get(channel_name)
-
-    def _event_handler(self, event_name, data, channel_name):
-        """Handle incoming data.
-
-        :param str event_name: Name of the event.
-        :param Any data: Data received.
-        :param str channel_name: Name of the channel this event and data belongs to.
-        """
-        if channel_name in self.channels:
-            self.channels[channel_name]._handle_event(event_name, data)
-
-    def _reconnect_handler(self):
-        """Handle a reconnect."""
-        for channel_name, channel in self.channels.items():
-            data = {'channel': channel_name}
-
-            if channel.auth:
-                data['auth'] = channel.auth
-
-            self.connection.send_event('pusher:subscribe', data)
+        return self._channels[channel_name]

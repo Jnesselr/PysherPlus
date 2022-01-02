@@ -20,7 +20,8 @@ setup(
     license="MIT",
     url="https://github.com/nlsdfnbch/Pysher",
     install_requires=[
-        "websocket-client!=0.49",
+        "autobahn",
+        "websocket-client",
         "requests"
     ],
     packages=["pysher"],

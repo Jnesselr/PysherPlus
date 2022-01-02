@@ -1,38 +1,29 @@
 #!/usr/bin/env python
 
 import sys
-sys.path.append('..')
-
 import time
 
-import pusherclient
+from pysher.authentication import KnownSecretAuthentication
+from pysher.pusher import Pusher
 
-global pusher
 
-def print_usage(filename):
-    print("Usage: python %s <appkey> <secret> <userid>" % filename)
-
-def channel_callback(data):
-    print("Channel Callback: %s" % data)
-
-def connect_handler(data):
-    channel = pusher.subscribe("presence-channel")
-
-    channel.bind('my_event', channel_callback)
+def channel_callback(event, data):
+    print(f"Channel Callback: ({event}) {data}")
 
 
 if __name__ == '__main__':
     if len(sys.argv) != 4:
-        print_usage(sys.argv[0])
+        print(f"Usage: python {sys.argv[0]} <app_key> <secret> <user_id>")
         sys.exit(1)
 
-    appkey = sys.argv[1]
+    app_key = sys.argv[1]
     secret = sys.argv[2]
-    userid = sys.argv[3]
+    user_id = sys.argv[3]
 
-    pusher = pusherclient.Pusher(appkey, secret=secret, user_data={'user_id': userid})
+    auth = KnownSecretAuthentication(app_key, secret, user_data={'user_id': user_id})
 
-    pusher.connection.bind('pusher:connection_established', connect_handler)
+    pusher = Pusher(app_key, auth)
+    pusher['presence-channel']['my_event'].register(channel_callback)
     pusher.connect()
 
     while True:

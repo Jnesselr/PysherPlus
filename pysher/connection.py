@@ -1,22 +1,38 @@
+import enum
 import sched
 from threading import Thread
 from collections import defaultdict
+from typing import Callable, Any, Dict, Optional
+
 import websocket
 import logging
 import time
 import json
 
+from pysher.authentication import AuthResult, PysherAuthentication
 
-class Connection(Thread):
-    def __init__(self, event_handler, url, reconnect_handler=None, log_level=None,
-                 daemon=True, reconnect_interval=10, socket_kwargs=None, **thread_kwargs):
-        self.event_handler = event_handler
+ChannelCallback = Callable[[str, Any], None]
+
+
+class ConnectionState(enum.Enum):
+    INITIALIZED = enum.auto()
+    FAILED = enum.auto()
+    CONNECTING = enum.auto()
+    CONNECTED = enum.auto()
+    DISCONNECTED = enum.auto()
+
+
+class Connection(object):
+    def __init__(self,
+                 url: str,
+                 authenticator: Optional[PysherAuthentication] = None,
+                 log_level=None,
+                 reconnect_interval=10, socket_kwargs=None):
         self.url = url
-
-        self.reconnect_handler = reconnect_handler or (lambda: None)
+        self._authenticator = authenticator
 
         self.socket = None
-        self.socket_id = ""
+        self.socket_id: str = ""
 
         self.event_callbacks = defaultdict(list)
 
@@ -36,7 +52,7 @@ class Connection(Thread):
         self.bind("pusher:ping", self._ping_handler)
         self.bind("pusher:error", self._pusher_error_handler)
 
-        self.state = "initialized"
+        self.state: ConnectionState = ConnectionState.INITIALIZED
 
         self.logger = logging.getLogger(self.__module__)  # create a new logger
 
@@ -66,9 +82,9 @@ class Connection(Thread):
         )
         self.timeout_scheduler_thread = None
 
-        Thread.__init__(self, **thread_kwargs)
-        self.daemon = daemon
-        self.name = "PysherEventLoop"
+        self._channels: Dict[str, ChannelCallback] = {}
+
+        self._thread: Optional[Thread] = None
 
     def bind(self, event_name, callback, *args, **kwargs):
         """Bind an event to a callback
@@ -80,12 +96,51 @@ class Connection(Thread):
         """
         self.event_callbacks[event_name].append((callback, args, kwargs))
 
+    def subscribe(self, channel_name: str, callback: ChannelCallback):
+        if self.state == ConnectionState.CONNECTED:
+            data = {'channel': channel_name}
+
+            is_private = channel_name.startswith('private-')
+            is_presence = channel_name.startswith('presence-')
+            needs_auth = is_private or is_presence
+
+            auth_result: Optional[AuthResult] = None
+            if needs_auth:
+                auth_result = self._authenticator.auth_token(self.socket_id, channel_name)
+
+            if auth_result is not None:
+                data['auth'] = auth_result.token
+
+                if is_presence:
+                    user_data = auth_result.user_data or {}
+
+                    data['channel_data'] = json.dumps(user_data)
+
+            self.send_event('pusher:subscribe', data)
+
+        self._channels[channel_name] = callback
+
+    def unsubscribe(self, channel_name: str):
+        if channel_name in self._channels:
+            if self.state == ConnectionState.CONNECTED:
+                self.send_event(
+                    'pusher:unsubscribe', {
+                        'channel': channel_name,
+                    }
+                )
+            del self._channels[channel_name]
+
     def disconnect(self, timeout=None):
+        if self.state == ConnectionState.DISCONNECTED:
+            return
+
         self.needs_reconnect = False
         self.disconnect_called = True
         if self.socket:
             self.socket.close()
-        self.join(timeout)
+        if self._thread is not None:
+            self._thread.join(timeout)
+            self._thread = None
 
     def reconnect(self, reconnect_interval=None):
         if reconnect_interval is None:
@@ -98,11 +153,22 @@ class Connection(Thread):
         if self.socket:
             self.socket.close()
 
-    def run(self):
-        self._connect()
+    def connect(self):
+        if self.state == ConnectionState.CONNECTED:
+            return
 
-    def _connect(self):
-        self.state = "connecting"
+        if self._thread is None:
+            self._thread = Thread(
+                name="PysherEventLoop",
+                target=self._run,
+                daemon=True
+            )
+            self._thread.start()
+        else:
+            self.needs_reconnect = True
+
+    def _run(self):
+        self.state = ConnectionState.CONNECTING
 
         self.socket = websocket.WebSocketApp(
             self.url,
@@ -117,15 +183,16 @@ class Connection(Thread):
         while self.needs_reconnect and not self.disconnect_called:
             self.logger.info("Attempting to connect again in %s seconds."
                              % self.reconnect_interval)
-            self.state = "unavailable"
+            self.state = ConnectionState.DISCONNECTED
             time.sleep(self.reconnect_interval)
+            self.state = ConnectionState.CONNECTING
 
             # We need to set this flag since closing the socket will set it to
             # false
             self.socket.keep_running = True
             self.socket.run_forever(**self.socket_kwargs)
 
-    def _on_open(self, *args):
+    def _on_open(self, *_):
         self.logger.info("Connection: Connection opened")
 
         # Send a ping right away to inform that the connection is alive. If you
@@ -136,7 +203,7 @@ class Connection(Thread):
 
     def _on_error(self, *args):
         self.logger.info("Connection: Error - %s" % args[-1])
-        self.state = "failed"
+        self.state = ConnectionState.FAILED
         self.needs_reconnect = True
 
     def _on_message(self, *args):
@@ -149,10 +216,11 @@ class Connection(Thread):
         params = self._parse(message)
 
         if 'event' in params.keys():
+            event_name: str = params['event']
             if 'channel' not in params.keys():
-                # We've got a connection event.  Lets handle it.
-                if params['event'] in self.event_callbacks.keys():
-                    for func, args, kwargs in self.event_callbacks[params['event']]:
+                # We've got a connection event.  Let's handle it.
+                if event_name in self.event_callbacks.keys():
+                    for func, args, kwargs in self.event_callbacks[event_name]:
                         try:
                             func(params.get('data', None), *args, **kwargs)
                         except Exception:
@@ -160,20 +228,17 @@ class Connection(Thread):
                 else:
                     self.logger.info("Connection: Unhandled event")
             else:
-                # We've got a channel event.  Lets pass it up to the pusher
-                # so it can be handled by the appropriate channel.
-                self.event_handler(
-                    params['event'],
-                    params.get('data'),
-                    params['channel']
-                )
+                if not event_name.startswith('pusher_internal'):
+                    channel_name = params['channel']
+                    if channel_name in self._channels:
+                        self._channels[channel_name](event_name, params.get('data'))
 
         # We've handled our data, so restart our connection timeout handler
         self._start_timers()
 
-    def _on_close(self, *args):
+    def _on_close(self, *_):
         self.logger.info("Connection: Connection closed")
-        self.state = "disconnected"
+        self.state = ConnectionState.DISCONNECTED
         self._stop_timers()
 
     @staticmethod
@@ -191,11 +256,13 @@ class Connection(Thread):
         self.connection_timer = self.timeout_scheduler.enter(self.connection_timeout, 2, self._connection_timed_out)
 
         if not self.timeout_scheduler_thread:
-            self.timeout_scheduler_thread = Thread(target=self.timeout_scheduler.run, daemon=True, name="PysherScheduler")
+            self.timeout_scheduler_thread = Thread(target=self.timeout_scheduler.run, daemon=True,
+                                                   name="PysherScheduler")
             self.timeout_scheduler_thread.start()
 
         elif not self.timeout_scheduler_thread.is_alive():
-            self.timeout_scheduler_thread = Thread(target=self.timeout_scheduler.run, daemon=True, name="PysherScheduler")
+            self.timeout_scheduler_thread = Thread(target=self.timeout_scheduler.run, daemon=True,
+                                                   name="PysherScheduler")
             self.timeout_scheduler_thread.start()
 
     def _cancel_scheduler_event(self, event):
@@ -244,34 +311,29 @@ class Connection(Thread):
             self.pong_received = False
         else:
             self.logger.info("Did not receive pong in time.  Will attempt to reconnect.")
-            self.state = "failed"
+            self.state = ConnectionState.FAILED
             self.reconnect()
 
     def _connect_handler(self, data):
         parsed = json.loads(data)
         self.socket_id = parsed['socket_id']
-        self.state = "connected"
+        self.state = ConnectionState.CONNECTED
 
-        if self.needs_reconnect:
+        # It's as if we've unsubscribed from all channels, so we clear our known channels and re-subscribe again
+        current_channels: dict[str, ChannelCallback] = self._channels
+        self._channels = {}
+        for channel_name, callback in current_channels.items():
+            self.subscribe(channel_name, callback)
 
-            # Since we've opened a connection, we don't need to try to reconnect
-            self.needs_reconnect = False
+    def _failed_handler(self, _):
+        self.state = ConnectionState.FAILED
 
-            self.reconnect_handler()
-
-            self.logger.debug('Connection: Establisheds reconnection')
-        else:
-            self.logger.debug('Connection: Establisheds first connection')
-
-    def _failed_handler(self, data):
-        self.state = "failed"
-
-    def _ping_handler(self, data):
+    def _ping_handler(self, _):
         self.send_pong()
         # Restart our timers since we received something on the connection
         self._start_timers()
 
-    def _pong_handler(self, data):
+    def _pong_handler(self, _):
         self.logger.info("Connection: pong from pusher")
         self.pong_received = True
 
@@ -280,7 +342,7 @@ class Connection(Thread):
 
             try:
                 error_code = int(data['code'])
-            except:
+            except BaseException:
                 error_code = None
 
             if error_code is not None:
@@ -305,11 +367,12 @@ class Connection(Thread):
 
     def _connection_timed_out(self):
         self.logger.info("Did not receive any data in time.  Reconnecting.")
-        self.state = "failed"
+        self.state = ConnectionState.FAILED
         self.reconnect()
 
 
 def sleep_max_n(max_sleep_time):
     def sleep(time_to_sleep):
         time.sleep(min(max_sleep_time, time_to_sleep))
+
     return sleep

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional, Any, Union
 
-import requests as requests
+import requests
 
 
 @dataclass(frozen=True)
@@ -16,7 +16,7 @@ class AuthResult(object):
 
 class PysherAuthentication(abc.ABC):
     @abc.abstractmethod
-    def auth_token(self, socket_id: int, channel_name: str) -> Optional[AuthResult]:
+    def auth_token(self, socket_id: str, channel_name: str) -> Optional[AuthResult]:
         pass
 
 
@@ -32,7 +32,7 @@ class KnownSecretAuthentication(PysherAuthentication):
         self._secret = secret
         self._user_data = user_data
 
-    def auth_token(self, socket_id: int, channel_name: str) -> Optional[AuthResult]:
+    def auth_token(self, socket_id: str, channel_name: str) -> Optional[AuthResult]:
         is_presence_channel = channel_name.startswith('presence-')
         if is_presence_channel:
             subject = f"{socket_id}:{channel_name}"
@@ -55,7 +55,7 @@ class URLAuthentication(PysherAuthentication):
         self._session = session or requests.Session()
         self._url = url
 
-    def auth_token(self, socket_id: int, channel_name: str) -> Optional[AuthResult]:
+    def auth_token(self, socket_id: str, channel_name: str) -> Optional[AuthResult]:
         response = self._session.post(
             self._url,
             json={
