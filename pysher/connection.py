@@ -54,10 +54,10 @@ class Connection(Thread):
         # account for small timing delays which may cause messages to not be
         # received in exact 5 minute intervals.
 
-        self.connection_timeout = 305
+        self.connection_timeout = 35
         self.connection_timer = None
 
-        self.ping_interval = 120
+        self.ping_interval = 25
         self.ping_timer = None
 
         self.timeout_scheduler = sched.scheduler(
@@ -129,7 +129,7 @@ class Connection(Thread):
         self.logger.info("Connection: Connection opened")
 
         # Send a ping right away to inform that the connection is alive. If you
-        # don't do this, it takes the ping interval to subcribe to channel and
+        # don't do this, it takes the ping interval to subscribe to channel and
         # events
         self.send_ping()
         self._start_timers()

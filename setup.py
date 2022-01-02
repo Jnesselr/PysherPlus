@@ -2,12 +2,11 @@ from setuptools import setup
 
 VERSION = "1.0.6"
 
-requirements = ["websocket-client!=0.49"]
-
 
 def readme():
     with open('README.md', encoding="utf8") as f:
         return f.read()
+
 
 setup(
     name="Pysher",
@@ -20,7 +19,10 @@ setup(
     author_email="nlsdfnbch.foss@kolabnow.com",
     license="MIT",
     url="https://github.com/nlsdfnbch/Pysher",
-    install_requires=requirements,
+    install_requires=[
+        "websocket-client!=0.49",
+        "requests"
+    ],
     packages=["pysher"],
     classifiers=[
         'Development Status :: 4 - Beta',

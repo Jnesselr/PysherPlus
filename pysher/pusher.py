@@ -1,11 +1,11 @@
+import json
+import logging
+from typing import Optional
 from urllib.parse import urlparse
 
+from pysher.authentication import PysherAuthentication, AuthResult
 from pysher.channel import Channel
 from pysher.connection import Connection
-import hashlib
-import hmac
-import logging
-import json
 
 VERSION = '0.6.0'
 
@@ -53,14 +53,6 @@ class PusherHost(object):
         return self._key
 
     @property
-    def key_as_bytes(self):
-        return self._key.encode('UTF-8')
-
-    @property
-    def secret_as_bytes(self):
-        return self._secret.encode('UTF-8')
-
-    @property
     def url(self):
         path = f"{self._path_prefix}/app/{self._key}" \
                f"?client={self._client_id}&version={VERSION}&protocol={self._protocol_version}"
@@ -102,31 +94,22 @@ class Pusher(object):
     client_id = "Pysher"
     protocol = 6
 
-    def __init__(self, host: PusherHost, user_data=None, log_level=logging.INFO,
-                 daemon=True, reconnect_interval=10, auto_sub=False):
-        """Initialize the Pusher instance.
-
-
-        :param Optional[Dict] user_data:
-        :param str log_level:
-        :param bool daemon:
-        :param int or float reconnect_interval:
-        :param bool auto_sub:
-        """
+    def __init__(self,
+                 host: PusherHost,
+                 authenticator: Optional[PysherAuthentication] = None,
+                 log_level=logging.INFO,
+                 daemon=True,
+                 reconnect_interval=10,
+                 auto_sub=False):
         self.host: PusherHost = host
-        self.url = host.url
-        self.key = host.key
-
-        self.user_data = user_data or {}
+        self.authenticator: Optional[PysherAuthentication] = authenticator
 
         self.channels = {}
 
-        if auto_sub:
-            reconnect_handler = self._reconnect_handler
-        else:
-            reconnect_handler = None
+        reconnect_handler = self._reconnect_handler if auto_sub else None
 
-        self.connection = Connection(self._connection_handler, self.url,
+        self.connection = Connection(self._event_handler,
+                                     host.url,
                                      reconnect_handler=reconnect_handler,
                                      log_level=log_level,
                                      daemon=daemon,
@@ -142,7 +125,7 @@ class Pusher(object):
         self.connection.disconnect(timeout)
         self.channels = {}
 
-    def subscribe(self, channel_name, auth=None):
+    def subscribe(self, channel_name):
         """Subscribe to a channel.
 
         :param str channel_name: The name of the channel to subscribe to.
@@ -150,14 +133,22 @@ class Pusher(object):
         :rtype: pysher.Channel
         """
         data = {'channel': channel_name}
-        if auth is None:
-            if channel_name.startswith('presence-'):
-                data['auth'] = self._generate_presence_token(channel_name)
-                data['channel_data'] = json.dumps(self.user_data)
-            elif channel_name.startswith('private-'):
-                data['auth'] = self._generate_auth_token(channel_name)
-        else:
-            data['auth'] = auth
+
+        is_private = channel_name.startswith('private-')
+        is_presence = channel_name.startswith('presence-')
+        needs_auth = is_private or is_presence
+
+        auth_result: Optional[AuthResult] = None
+        if needs_auth:
+            auth_result = self.authenticator.auth_token(self.connection.socket_id, channel_name)
+
+        if auth_result is not None:
+            data['auth'] = auth_result.token
+
+            if is_presence:
+                user_data = auth_result.user_data or {}
+
+                data['channel_data'] = json.dumps(user_data)
 
         self.connection.send_event('pusher:subscribe', data)
 
@@ -186,7 +177,7 @@ class Pusher(object):
         """
         return self.channels.get(channel_name)
 
-    def _connection_handler(self, event_name, data, channel_name):
+    def _event_handler(self, event_name, data, channel_name):
         """Handle incoming data.
 
         :param str event_name: Name of the event.
@@ -205,27 +196,3 @@ class Pusher(object):
                 data['auth'] = channel.auth
 
             self.connection.send_event('pusher:subscribe', data)
-
-    def _generate_auth_token(self, channel_name):
-        """Generate a token for authentication with the given channel.
-
-        :param str channel_name: Name of the channel to generate a signature for.
-        :rtype: str
-        """
-        subject = f"{self.connection.socket_id}:{channel_name}"
-        h = hmac.new(self.host.secret_as_bytes, subject.encode('utf-8'), hashlib.sha256)
-        auth_key = f"{self.key}:{h.hexdigest()}"
-
-        return auth_key
-
-    def _generate_presence_token(self, channel_name):
-        """Generate a presence token.
-
-        :param str channel_name: Name of the channel to generate a signature for.
-        :rtype: str
-        """
-        subject = f"{self.connection.socket_id}:{channel_name}:{json.dumps(self.user_data)}"
-        h = hmac.new(self.host.secret_as_bytes, subject.encode('utf-8'), hashlib.sha256)
-        auth_key = f"{self.key}:{h.hexdigest()}"
-
-        return auth_key

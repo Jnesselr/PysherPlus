@@ -2,14 +2,12 @@ from collections import defaultdict
 
 
 class Channel(object):
-    def __init__(self, channel_name, connection, auth=None):
+    def __init__(self, channel_name, connection):
         self.name = channel_name
 
         self.connection = connection
 
         self.event_callbacks = defaultdict(list)
-
-        self.auth = auth
 
     def bind(self, event_name, callback, *args, **kwargs):
         """Bind an event to a callback
@@ -36,6 +34,7 @@ class Channel(object):
                     self.connection.send_event(event_name, data, channel_name=self.name)
 
     def _handle_event(self, event_name, data):
+        print(f"Raw handle event: {event_name} {data}")
         if event_name in self.event_callbacks.keys():
             for callback, args, kwargs in self.event_callbacks[event_name]:
                 callback(data, *args, **kwargs)
