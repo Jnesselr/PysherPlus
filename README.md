@@ -1,4 +1,4 @@
-[![PyPI version](https://badge.fury.io/py/Pysher.svg)](https://badge.fury.io/py/Pysher)
+[![PyPI version](https://badge.fury.io/py/PysherPlus.svg)](https://badge.fury.io/py/PysherPlus)
 
 # Pysher
 
