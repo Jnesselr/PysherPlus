@@ -2,7 +2,7 @@
 
 import sys
 
-from pysher.pusher import Pusher
+from pysherplus.pusher import Pusher
 import time
 
 # Add a logging handler so that we can see the raw communication data

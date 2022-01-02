@@ -3,8 +3,8 @@
 import sys
 import time
 
-from pysher.authentication import KnownSecretAuthentication
-from pysher.pusher import Pusher
+from pysherplus.authentication import KnownSecretAuthentication
+from pysherplus.pusher import Pusher
 
 
 def channel_callback(event, data):

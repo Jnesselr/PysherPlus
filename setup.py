@@ -1,6 +1,6 @@
 from setuptools import setup
 
-VERSION = "1.0.6"
+VERSION = "2.0.0"
 
 
 def readme():
@@ -9,22 +9,21 @@ def readme():
 
 
 setup(
-    name="Pysher",
+    name="PysherPlus",
     version=VERSION,
-    description="Pusher websocket client for python, based on Erik Kulyk's PythonPusherClient",
+    description="Pusher websocket client for python, based on deepbrook's fork of Erik Kulyk's PythonPusherClient",
     long_description=readme(),
     long_description_content_type='text/markdown',
     keywords="pusher websocket client",
-    author="Nils Diefenbach",
-    author_email="nlsdfnbch.foss@kolabnow.com",
+    author="Justin Nesselrotte",
+    author_email="admin@jnesselr.org",
     license="MIT",
-    url="https://github.com/nlsdfnbch/Pysher",
+    url="https://github.com/jnesselr/PysherPlus",
     install_requires=[
-        "autobahn",
         "websocket-client",
         "requests"
     ],
-    packages=["pysher"],
+    packages=["pysherplus"],
     classifiers=[
         'Development Status :: 4 - Beta',
         'Environment :: Web Environment',

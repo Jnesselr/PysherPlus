@@ -2,11 +2,11 @@ import logging
 from typing import Optional, Union
 from urllib.parse import urlparse
 
-from pysher.authentication import PysherAuthentication
-from pysher.channel import Channel
-from pysher.connection import Connection
+from pysherplus.authentication import PysherAuthentication
+from pysherplus.channel import Channel
+from pysherplus.connection import Connection
 
-VERSION = '0.6.0'
+VERSION = '2.0.0'
 
 
 class PusherHost(object):

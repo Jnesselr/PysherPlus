@@ -1,6 +1,6 @@
 from typing import Callable, Any, Dict, List
 
-from pysher.connection import Connection
+from pysherplus.connection import Connection
 
 # func(event_name, data) -> None
 EventCallback = Callable[[str, Any], None]

@@ -9,7 +9,7 @@ import logging
 import time
 import json
 
-from pysher.authentication import AuthResult, PysherAuthentication
+from pysherplus.authentication import AuthResult, PysherAuthentication
 
 ChannelCallback = Callable[[str, Any], None]
 
