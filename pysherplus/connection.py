@@ -86,6 +86,10 @@ class Connection(object):
 
         self._thread: Optional[Thread] = None
 
+    @property
+    def connected(self):
+        return self.state == ConnectionState.CONNECTED
+
     def bind(self, event_name, callback, *args, **kwargs):
         """Bind an event to a callback
 
@@ -228,10 +232,9 @@ class Connection(object):
                 else:
                     self.logger.info("Connection: Unhandled event")
             else:
-                if not event_name.startswith('pusher_internal'):
-                    channel_name = params['channel']
-                    if channel_name in self._channels:
-                        self._channels[channel_name](event_name, params.get('data'))
+                channel_name = params['channel']
+                if channel_name in self._channels:
+                    self._channels[channel_name](event_name, params.get('data'))
 
         # We've handled our data, so restart our connection timeout handler
         self._start_timers()

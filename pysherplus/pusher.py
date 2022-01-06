@@ -6,7 +6,7 @@ from pysherplus.authentication import PysherAuthentication
 from pysherplus.channel import Channel
 from pysherplus.connection import Connection
 
-VERSION = '2.0.0'
+VERSION = '2.0.1'  # TODO dedup this with the one in setup.py
 
 
 class PusherHost(object):
@@ -93,7 +93,7 @@ class Pusher(object):
         url = host  # Assume it's the host url
         if isinstance(host, str) and not host.startswith('ws'):
             # host is probably app key instead
-            url = PusherHost(host).url
+            url = PusherHost(key=host).url
         elif isinstance(host, PusherHost):
             url = host.url
 
@@ -104,6 +104,10 @@ class Pusher(object):
                                       log_level=log_level,
                                       reconnect_interval=reconnect_interval,
                                       socket_kwargs=dict(ping_timeout=100))
+
+    @property
+    def connected(self):
+        return self._connection.connected
 
     def connect(self):
         """Connect to Pusher"""

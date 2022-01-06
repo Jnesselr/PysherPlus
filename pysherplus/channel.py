@@ -30,14 +30,22 @@ class Channel(object):
         self._channel_name = channel_name
         self._connection = connection
         self._event_callbacks: Dict[str, List[EventCallback]] = {}
+        self._subscribe_submitted: bool = False
         self._is_subscribed: bool = False
+
+    @property
+    def subscribed(self) -> bool:
+        if not self._connection.connected:
+            self._is_subscribed = False  # Can't be subscribed if you're not connected. Sorry we didn't know earlier.
+
+        return self._is_subscribed
 
     def _register(self, event_name: str, callback: EventCallback):
         self._event_callbacks.setdefault(event_name, []).append(callback)
 
         if not self._is_subscribed:
             self._connection.subscribe(self._channel_name, self._handle_event)
-            self._is_subscribed = True
+            self._subscribe_submitted = True
 
     def _unregister(self, event_name: str, callback: EventCallback):
         self._event_callbacks.setdefault(event_name, []).remove(callback)
@@ -47,6 +55,7 @@ class Channel(object):
 
         if len(self._event_callbacks) == 0:
             self._connection.unsubscribe(self._channel_name)
+            self._subscribe_submitted = False
             self._is_subscribed = False
 
     def __getitem__(self, event_name: str):
@@ -67,6 +76,12 @@ class Channel(object):
                     self._connection.send_event(event_name, data, channel_name=self._channel_name)
 
     def _handle_event(self, event_name: str, data: Any):
+        if event_name.startswith('pusher_internal'):
+            if event_name == 'pusher_internal:subscription_succeeded':
+                self._is_subscribed = True
+
+            return
+
         if event_name in self._event_callbacks.keys():
             callback: EventCallback
             for callback in self._event_callbacks[event_name]:
